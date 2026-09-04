@@ -1,0 +1,229 @@
+Wheal Maid Vegetation Index Google Earth Engine Code Editor 
+
+**** NOTE 
+LINE 223 TO BE UPDATED WITH APPROIATE FILE NAME CONVENTION 
+
+**** Steps prior 
+ROI was created by using the polygon tool in GGE 
+
+
+/// The following code can be imported into Google Earth Engine 
+
+below is the JS to copy and paste 
+
+var ROI = 
+    /* color: #d63000 */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-5.168101879609594, 50.240694071533724],
+          [-5.168101879609594, 50.23240432555435],
+          [-5.1538110699782465, 50.23240432555435],
+          [-5.1538110699782465, 50.240694071533724]]], null, false);
+
+
+
+// Sentinel-2 Vegetation Recovery Monitoring
+// Wheal Maid, Cornwall, UK
+
+// Select ROI (region of interest)
+
+Map.centerObject(ROI, 11);
+
+Map.addLayer(
+  ROI,
+  {color:'red'},
+  'Study Area'
+);
+
+var S2A = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(ROI)
+  .filter(ee.Filter.eq('SPACECRAFT_NAME', 'Sentinel-2A'));
+
+// Set temporal month range 
+
+var seasons = {
+
+  GorseWindow:  {
+    startMonth: 4,
+    startDay: 1,
+    endMonth: 5,
+    endDay: 31
+   },
+  
+  HeatherWindow: {
+    startMonth: 8,
+    startDay: 1,
+    endMonth: 9,
+    endDay: 30
+   },
+ };
+
+// Set temporal year range
+
+var startYear = 2017;
+var endYear = 2026;
+
+
+// cloud / shadow mask 
+
+  function maskS2(image)  {
+  var scl = image.select('SCL');
+  var mask = scl.eq(4).or(scl.eq(5)).or(scl.eq(6)).or(scl.eq(7));
+  return image.updateMask(mask);
+ }
+
+// compute indices 
+
+function addIndices(image)  {
+
+// Convert reflectance to 0-1
+// Prepares optical imagery bands for accurate calculation of indices
+
+var img = image.divide(10000);
+
+// A note on Sentinel-2 bands
+// refer to  https://custom-scripts.sentinel-hub.com/custom-scripts/sentinel-2/bands/ for further information on Sentinel-2 Bands & uses \
+
+// B2 (BLUE) -- soil and vegetation discrimination
+// B3 (GREEN) -- contrast between clear and muddy water
+// B4 (RED) -- id of vegetation types
+// B5 (RED EDGE) -- classifying vegetation
+// B6 (RED EDGE 2) -- vegetation, biomass, stress
+// B8 (NIR) --  detection & analysing veg
+// B11 (SWIR 1) -- measure mositure content of soil and veg
+
+// PSRI (Plant Senescence Reflectance Index)
+// (B4 - B2) / B6
+// used for studying vegetation
+
+var psri = img.expression('((B4 - B2) / B6)',
+   {B4: img.select('B4'), B2: img.select('B2'), B6: img.select('B6')}
+).rename('PSRI');
+
+
+// SAVI (Soil Adjusted Vegetation Index)
+// ((B8 - B4) / (B8 + B4 + L)) * (1+L)
+// where L is the soil brightness correction factor here we will use 0.5 
+
+  var savi = img.expression('((B8 - B4) / (B8 + B4 + 0.5)) * 1.5',
+    {B8: img.select('B8'), B4: img.select('B4')}
+  ).rename('SAVI');
+  
+// NDYI (Normalized Difference Yellowness Index)
+// used to detect and map yellow color in vegetation 
+
+  var ndyi = img.expression('((B3 - B2) / (B3 + B2))',
+  {B3: img.select('B3'), B2: img.select('B2')}
+  ).rename('NDYI');
+
+// MARI (Modified Anthocyanin Reflectance Index)
+// used to detect the amount of anthocynain pigmentation in vegtation 
+
+  var mari = img.expression('((1.0 / B3) - (1.0 / B5)) * B7',
+  {B3: img.select('B3'), B5: img.select('B5'), B7: img.select('B7')}
+  ).rename('MARI');
+  
+  
+// GCI (Green Chlorophyll Index)
+// used to estimate the leaf chlorophyll content in plants
+// (NIR / Green) - 1
+  
+  var gci = img.expression('(B8/B3)-1', {B8: img.select('B8'), B3: img.select('B3')})
+    .rename('GCI');
+
+
+// GNDVI (Green Normalised Difference Vegetation Index) 
+// used to measure plant chlorophyll, photosynthethic 
+
+  var gndvi = img.expression('((B8-B3)/(B8+B3))', \{B8: img.select('B8'), B3: img.select('B3')\})\
+    .rename('GNDVI');
+    
+// RDVI (Renormalised Difference Vegetation Index) 
+// measure plant health, vegetation density and chlorophyll 
+
+  var rdvi = img.expression('(B8 - B4) / sqrt(B8 + B4)', {B8: img.select('B8'),B4: img.select('B4')})
+  .rename('RDVI');
+  
+// NDMI (Normalized Difference Moisture Index)
+// measure moisture context 
+// (B8 - B11) / (B8 + B11)
+
+var ndmi = img.normalizedDifference(['B8','B11'])
+  .rename('NDMI');\
+
+// NDVI (Normalized Difference Vegetation Index)
+// measure vegtation health, chlorophyll 
+// (B8 - B4) / (B8 + B4)\
+
+var ndvi = img.normalizedDifference(['B8','B4'])
+  .rename('NDVI');
+
+   // Return the original image bands along with all newly calculated indices
+  return image.addBands([psri, savi, ndyi, mari, gci, gndvi, rdvi, ndmi, ndvi ]);
+}
+
+// Process data and add to the map
+
+  Object.keys(seasons).forEach(function(seasonName) {
+  var s = seasons[seasonName];
+
+  for (var year = startYear; year <= endYear; year++)  {
+    var start = ee.Date.fromYMD(year, s.startMonth, s.startDay);
+    var end   = ee.Date.fromYMD(year, s.endMonth, s.endDay).advance(1, 'day');
+   
+
+    var seasonalColl = S2A.filterDate(start, end);
+    var count = seasonalColl.size();
+
+    var processed = seasonalColl
+      .map(maskS2)
+      .median()
+      .set('year', year)
+      .set('season', seasonName);
+
+    var processedWithIndices = addIndices(processed);
+
+    print(ee.String('Status for ').cat(seasonName).cat('_').cat(ee.Number(year).format()), count);
+
+    // Display NDVI layer on the map
+    Map.addLayer(
+      processedWithIndices.select('NDVI').clip(ROI),
+      { min: -0.1, max: 0.6, palette: ['brown', 'yellow', 'green'] },
+      'NDVI ' + seasonName + ' ' + year,
+      false
+    );
+
+// List of indices to export
+
+    var indexList = ['PSRI', 'SAVI', 'NDYI', 'MARI', 'GCI', 'GNDVI', 'RDVI', 'NDMI', 'NDVI'];\
+
+// Call export for every index in this year/season
+    
+    indexList.forEach(function(indexName) {
+      exportIndex(processedWithIndices, indexName, year, seasonName);
+    });
+  }
+});
+
+// Export Function
+
+function exportIndex(image, indexName, year, seasonName) {
+  
+  // Cast to Float32 to prevent GEE server export errors
+  
+  var indexBand = image.select(indexName).toFloat().clip(ROI);
+
+  Export.image.toDrive({
+    image: indexBand,
+    description: indexName + '_' + seasonName + '_' + year,
+    folder: 'GEE_INDICES_DDMMYY',
+    fileNamePrefix: indexName + '_' + seasonName + '_' + year,
+    region: ROI,
+    scale: 10,
+    crs: 'EPSG:4326'
+  });
+}}
